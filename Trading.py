@@ -1,4 +1,5 @@
 import asyncio
+import os
 import ccxt
 import pandas as pd
 import ta
@@ -8,7 +9,11 @@ from telegram import BotCommand, Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 # ✅ إعدادات تيليجرام
-TOKEN = ''
+TOKEN = os.getenv("BOT_TOKEN")
+if not TOKEN:
+    print("❌ Error: BOT_TOKEN environment variable is not set.")
+    exit(1)
+
 bot = Bot(token=TOKEN)
 
 # ✅ إعداد Binance
@@ -327,7 +332,14 @@ def main():
     # app.add_handler(CommandHandler("daily", daily))
     app.add_handler(CommandHandler("help", help_command))
     print("✅ البوت يعمل الآن...")
-    app.run_polling() 
+    
+    # Webhook configuration
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=int(os.environ.get("PORT", 10000)),
+        url_path=TOKEN,
+        webhook_url=f"https://telegram-crpto-bot.onrender.com/{TOKEN}"
+    )
 
 if __name__ == "__main__":
     main()
