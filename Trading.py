@@ -385,7 +385,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /help - عرض دليل الاستخدام الكامل
 
 ━━━━━━━━━━━━━━━━━━━━
-💡 *مثال:* /signal BTC/USDT
+💡 *مثال:* /signal BTC
 ⚠️ *تحذير:* تحليل تقني فقط وليس نصيحة استثمارية
 """
     await update.message.reply_text(msg, parse_mode='Markdown')
@@ -397,12 +397,12 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if len(context.args) == 0:  # type: ignore
-        await update.message.reply_text("اكتب اسم العملة بعد الأمر. مثال: /analyze BTC/USDT")
+        await update.message.reply_text("اكتب اسم العملة بعد الأمر. مثال: /analyze BTC")
         return
 
     symbol = context.args[0].upper()  # type: ignore
     
-    if not validate_symbol(symbol):
+    if not validate_symbol(symbol+"/USDT"):
         await update.message.reply_text(f"⚠️ العملة {symbol} غير موجودة أو غير مدعومة.")
         return
     
@@ -674,12 +674,12 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if len(context.args) == 0:  # type: ignore
-        await update.message.reply_text("📊 استخدم: /signal BTC/USDT")
+        await update.message.reply_text("📊 استخدم: /signal BTC")
         return
     
     symbol = context.args[0].upper()  # type: ignore
     
-    if not validate_symbol(symbol):
+    if not validate_symbol(symbol+"/USDT"):
         await update.message.reply_text(f"⚠️ العملة {symbol} غير موجودة.")
         return
     
@@ -837,7 +837,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 /signal <العملة>
 إشارة تداول احترافية مباشرة
-• مثال: /signal BTC/USDT
+• مثال: /signal BTC
 • يعطي: شراء قوي / بيع / احتفظ
 • مع: نقاط الدخول، Stop Loss، Take Profit
 • مستوى الثقة: 0-100%
@@ -886,7 +886,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ━━━━━━━━━━━━━━━━━━━━
 📞 أمثلة على الاستخدام:
 
-/signal BTC/USDT
+/signal BTC
 /analyze ETH/USDT
 /signals_scan
 /top
