@@ -185,7 +185,13 @@ async def list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     logger.warning(f"Could not fetch info for {uid}: {e}")
 
-            user_link = f"@{username}" if username else "بدون معرف"
+            # ✅ معالجة الاسم لتجنب أخطاء Markdown
+            if username:
+                safe_username = username.replace("_", "\\_")
+                user_link = f"@{safe_username}"
+            else:
+                user_link = "بدون معرف"
+
             date_str = created_at.strftime("%Y-%m-%d") if created_at else "?"
             msg += f"👤 `{uid}` - {user_link}\n📅 {date_str}\n\n"
 
