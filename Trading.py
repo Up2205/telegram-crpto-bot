@@ -169,7 +169,7 @@ async def list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("📭 لا يوجد مستخدمين مصرح لهم.")
             return
 
-        msg = "📋 *قائمة المستخدمين المصرح لهم:*\n\n"
+        msg = "📋 قائمة المستخدمين المصرح لهم: \n\n"
         for uid, username, created_at in rows:
             # ✅ محاولة جلب الاسم من تيليجرام إذا كان غير موجود
             if not username:
