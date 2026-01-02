@@ -819,7 +819,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 /analyze <العملة>
 تحليل عملة يدويًا
-• مثال: /analyze BTC/USDT
+• مثال: /analyze BTC
 • يعرض: السعر، الحجم، RSI، التغيرات
 
 /top
@@ -887,7 +887,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📞 أمثلة على الاستخدام:
 
 /signal BTC
-/analyze ETH/USDT
+/analyze ETH
 /signals_scan
 /top
 """
