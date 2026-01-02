@@ -519,7 +519,11 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     symbol = context.args[0].upper()  # type: ignore
     
-    if not validate_symbol(symbol+"/USDT"):
+    # ✅ إضافة USDT تلقائياً إذا لم يكتبها المستخدم
+    if not symbol.endswith('/USDT'):
+        symbol += '/USDT'
+    
+    if not validate_symbol(symbol):
         await update.message.reply_text(f"⚠️ العملة {symbol} غير موجودة أو غير مدعومة.")
         return
     
@@ -816,7 +820,11 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     symbol = context.args[0].upper()  # type: ignore
     
-    if not validate_symbol(symbol+"/USDT"):
+    # ✅ إضافة USDT تلقائياً إذا لم يكتبها المستخدم
+    if not symbol.endswith('/USDT'):
+        symbol += '/USDT'
+    
+    if not validate_symbol(symbol):
         await update.message.reply_text(f"⚠️ العملة {symbol} غير موجودة.")
         return
     
