@@ -82,8 +82,18 @@ def is_authorized(user_id: int) -> bool:
 
 async def check_auth(update: Update) -> bool:
     """دالة مساعدة للتحقق والرد"""
-    user_id = update.effective_user.id
-    if is_authorized(user_id):
+    user = update.effective_user
+    if is_authorized(user.id):
+        # ✅ تحديث اسم المستخدم عند الاستخدام
+        try:
+            if user.username and DATABASE_URL:
+                with get_db() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("UPDATE authorized_users SET username = %s WHERE user_id = %s", (user.username, user.id))
+                    conn.commit()
+        except Exception as e:
+            logger.error(f"Error updating username: {e}")
+            
         return True
         
     await update.message.reply_text(
@@ -141,6 +151,35 @@ async def unauth_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ تأكد من كتابة ID صحيح.")
     except Exception as e:
         await update.message.reply_text(f"❌ خطأ: {e}")
+
+async def list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """عرض قائمة المستخدمين المصرح لهم (للأدمن فقط)"""
+    user_id = update.effective_user.id
+    if user_id not in ADMIN_IDS:
+        await update.message.reply_text("⛔ *عذراً، هذا الأمر للأدمن فقط.*", parse_mode='Markdown')
+        return
+
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT user_id, username, created_at FROM authorized_users ORDER BY created_at DESC")
+                rows = cur.fetchall()
+
+        if not rows:
+            await update.message.reply_text("📭 لا يوجد مستخدمين مصرح لهم.")
+            return
+
+        msg = "📋 *قائمة المستخدمين المصرح لهم:*\n\n"
+        for uid, username, created_at in rows:
+            user_link = f"@{username}" if username else "بدون معرف"
+            date_str = created_at.strftime("%Y-%m-%d") if created_at else "?"
+            msg += f"👤 `{uid}` - {user_link}\n📅 {date_str}\n\n"
+
+        await update.message.reply_text(msg, parse_mode='Markdown')
+
+    except Exception as e:
+        logger.error(f"Error listing users: {e}")
+        await update.message.reply_text("❌ حدث خطأ أثناء جلب القائمة.")
 
 
 # ✅ إعداد Binance
@@ -1081,6 +1120,7 @@ def main():
     app.add_handler(CommandHandler("scan", scan))
     app.add_handler(CommandHandler("auth", auth_user))
     app.add_handler(CommandHandler("unauth", unauth_user))
+    app.add_handler(CommandHandler("users", list_users))
     app.add_handler(CommandHandler("help", help_command))
     
     logger.info("✅ البوت يعمل الآن...")
