@@ -86,7 +86,11 @@ async def check_auth(update: Update) -> bool:
     if is_authorized(user_id):
         return True
         
-    await update.message.reply_text("⛔ *عذراً، هذا البوت خاص.*\nيرجى التواصل مع الأدمن للتفعيل.", parse_mode='Markdown')
+    await update.message.reply_text(
+        "⛔ *عذراً، هذا البوت خاص.*\n"
+        "يرجى التواصل مع الأدمن (المسؤول) للتفعيل: @Up2205",
+        parse_mode='Markdown'  # parse_mode: يسمح بتنسيق النص (مثل استخدام * للخط العريض)
+    )
     return False
 
 # ✅ أوامر إدارة المستخدمين (للأدمن فقط)
