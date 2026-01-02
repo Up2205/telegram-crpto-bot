@@ -572,6 +572,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ━━━━━━━━━━━━━━━━━━━━
 💡 *مثال:* /signal BTC
 ⚠️ *تحذير:* تحليل تقني فقط وليس نصيحة استثمارية
+
+━━━━━━━━━━━━━━━━━━━━
+المطور : @Up2205
+
 """
     await update.message.reply_text(msg, parse_mode='Markdown')
 
