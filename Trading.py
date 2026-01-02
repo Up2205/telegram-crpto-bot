@@ -158,7 +158,7 @@ async def list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id not in ADMIN_IDS:
         await update.message.reply_text("⛔ *عذراً، هذا الأمر للأدمن فقط.*", parse_mode='Markdown')
         return
-
+    await update.message.reply_text("جاري جلب المستخدمين👥...")
     try:
         with get_db() as conn:
             with conn.cursor() as cur:
@@ -168,7 +168,7 @@ async def list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not rows:
             await update.message.reply_text("📭 لا يوجد مستخدمين مصرح لهم.")
             return
-
+        
         msg = "📋 قائمة المستخدمين المصرح لهم: \n\n"
         for uid, username, created_at in rows:
             # ✅ محاولة جلب الاسم من تيليجرام إذا كان غير موجود
