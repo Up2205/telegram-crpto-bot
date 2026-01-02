@@ -1143,6 +1143,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /analyze ETH
 /signals_scan
 /top
+
+
+━━━━━━━━━━━━━━━━━━━━
+المطور : @Up2205
 """
     await update.message.reply_text(msg)
 
