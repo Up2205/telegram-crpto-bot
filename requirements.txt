@@ -2,3 +2,4 @@ python-telegram-bot[webhooks]==20.7
 ccxt
 pandas
 ta
+psycopg2-binary

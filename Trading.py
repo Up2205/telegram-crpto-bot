@@ -3,6 +3,7 @@
 """
 import os
 import logging
+import psycopg2
 from functools import lru_cache
 from typing import List, Tuple, Optional
 import ccxt
@@ -24,11 +25,119 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ✅ إعدادات تيليجرام - استخدام متغير بيئة
+# ✅ إعدادات الأدمن وقاعدة البيانات
+ADMIN_IDS = [5389040264]
+DATABASE_URL = os.getenv("DATABASE_URL")
+
 # ✅ إعدادات تيليجرام - استخدام متغير بيئة
 TOKEN = os.getenv('BOT_TOKEN')
 if not TOKEN:
     logger.error("⚠️ BOT_TOKEN غير موجود! ضع التوكن في متغير البيئة.")
+
+# ✅ إعداد قاعدة البيانات
+def get_db():
+    if not DATABASE_URL:
+        logger.error("❌ DATABASE_URL غير موجود!")
+        return None
+    return psycopg2.connect(DATABASE_URL, sslmode="require")
+
+def init_db():
+    """إنشاء الجداول تلقائيًا إذا لم تكن موجودة"""
+    if not DATABASE_URL:
+        return
+        
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS authorized_users (
+                        user_id BIGINT PRIMARY KEY,
+                        username TEXT,
+                        added_by BIGINT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+            conn.commit()
+        logger.info("✅ تم تهيئة قاعدة البيانات بنجاح")
+    except Exception as e:
+        logger.error(f"❌ خطأ في تهيئة قاعدة البيانات: {e}")
+
+def is_authorized(user_id: int) -> bool:
+    """التحقق من صلاحية المستخدم"""
+    # الأدمن دائماً مصرح له
+    if user_id in ADMIN_IDS:
+        return True
+        
+    if not DATABASE_URL:
+        return False
+        
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM authorized_users WHERE user_id = %s", (user_id,))
+                return cur.fetchone() is not None
+    except Exception as e:
+        logger.error(f"خطأ في التحقق من الصلاحية: {e}")
+        return False
+
+async def check_auth(update: Update) -> bool:
+    """دالة مساعدة للتحقق والرد"""
+    user_id = update.effective_user.id
+    if is_authorized(user_id):
+        return True
+        
+    await update.message.reply_text("⛔ *عذراً، هذا البوت خاص.*\nيرجى التواصل مع الأدمن للتفعيل.", parse_mode='Markdown')
+    return False
+
+# ✅ أوامر إدارة المستخدمين (للأدمن فقط)
+async def auth_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """تفعيل مستخدم جديد"""
+    user_id = update.effective_user.id
+    if user_id not in ADMIN_IDS:
+        return
+
+    if not context.args:
+        await update.message.reply_text("استخدم الأمر هكذا:\n/auth 123456789")
+        return
+
+    try:
+        new_user_id = int(context.args[0])
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO authorized_users (user_id, added_by)
+                    VALUES (%s, %s)
+                    ON CONFLICT (user_id) DO NOTHING
+                """, (new_user_id, user_id))
+            conn.commit()
+        await update.message.reply_text(f"✅ تم تفعيل المستخدم: `{new_user_id}`", parse_mode='Markdown')
+    except ValueError:
+        await update.message.reply_text("❌ تأكد من كتابة ID صحيح (أرقام فقط).")
+    except Exception as e:
+        await update.message.reply_text(f"❌ خطأ: {e}")
+
+async def unauth_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """إلغاء تفعيل مستخدم"""
+    user_id = update.effective_user.id
+    if user_id not in ADMIN_IDS:
+        return
+
+    if not context.args:
+        await update.message.reply_text("استخدم الأمر هكذا:\n/unauth 123456789")
+        return
+
+    try:
+        target_id = int(context.args[0])
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM authorized_users WHERE user_id = %s", (target_id,))
+            conn.commit()
+        await update.message.reply_text(f"⛔ تم إلغاء تفعيل المستخدم: `{target_id}`", parse_mode='Markdown')
+    except ValueError:
+        await update.message.reply_text("❌ تأكد من كتابة ID صحيح.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ خطأ: {e}")
+
 
 # ✅ إعداد Binance
 exchange = ccxt.binance({
@@ -362,6 +471,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         logger.warning("تحديث بدون رسالة في /start")
         return
+
+    # ✅ التحقق من الصلاحية
+    if not await check_auth(update):
+        return
     
     msg = """🤖 *أهلاً بك في بوت التداول الذكي!*
 
@@ -394,6 +507,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """تحليل عملة محددة"""
     if not update.message:
+        return
+
+    # ✅ التحقق من الصلاحية
+    if not await check_auth(update):
         return
     
     if len(context.args) == 0:  # type: ignore
@@ -442,6 +559,10 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """العملات الأكثر تحركاً"""
     if not update.message:
+        return
+
+    # ✅ التحقق من الصلاحية
+    if not await check_auth(update):
         return
     
     await update.message.reply_text("🚀 جاري تحليل أكثر العملات تحركاً خلال 24 ساعة...")
@@ -513,6 +634,10 @@ async def silent_moves(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """العملات التي فيها ضخ سيولة بدون تحرك سعري"""
     if not update.message:
         return
+
+    # ✅ التحقق من الصلاحية
+    if not await check_auth(update):
+        return
     
     await update.message.reply_text("🔍 نبحث عن ضخ سيولة بدون حركة سعر...")
 
@@ -562,6 +687,10 @@ async def watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """تحليل قائمة العملات المتابعة"""
     if not update.message:
         return
+
+    # ✅ التحقق من الصلاحية
+    if not await check_auth(update):
+        return
     
     await update.message.reply_text("📋 نحلل القائمة الخاصة بك...")
     signals = []
@@ -586,6 +715,10 @@ async def watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """فحص السوق للفرص"""
     if not update.message:
+        return
+
+    # ✅ التحقق من الصلاحية
+    if not await check_auth(update):
         return
     
     await update.message.reply_text("🔎 جاري فحص السوق بحثًا عن فرص مؤكدة وغير مؤكدة...")
@@ -672,6 +805,10 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """إشارة تداول احترافية: متى تشتري ومتى تبيع"""
     if not update.message:
         return
+
+    # ✅ التحقق من الصلاحية
+    if not await check_auth(update):
+        return
     
     if len(context.args) == 0:  # type: ignore
         await update.message.reply_text("📊 استخدم: /signal BTC")
@@ -750,6 +887,10 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def signals_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """فحص جميع العملات وإيجاد أفضل الإشارات"""
     if not update.message:
+        return
+
+    # ✅ التحقق من الصلاحية
+    if not await check_auth(update):
         return
     
     await update.message.reply_text("🔍 جاري فحص السوق للبحث عن أفضل إشارات الشراء...")
@@ -913,6 +1054,9 @@ def main():
         logger.error("❌ TOKEN غير موجود! لا يمكن تشغيل البوت.")
         return
     
+    # تهيئة قاعدة البيانات
+    init_db()
+    
     app = Application.builder().token(TOKEN).post_init(setup_commands).build()
     
     app.add_handler(CommandHandler("start", start))
@@ -923,6 +1067,8 @@ def main():
     app.add_handler(CommandHandler("silent_moves", silent_moves))
     app.add_handler(CommandHandler("watchlist", watchlist))
     app.add_handler(CommandHandler("scan", scan))
+    app.add_handler(CommandHandler("auth", auth_user))
+    app.add_handler(CommandHandler("unauth", unauth_user))
     app.add_handler(CommandHandler("help", help_command))
     
     logger.info("✅ البوت يعمل الآن...")
