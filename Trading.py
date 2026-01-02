@@ -171,6 +171,20 @@ async def list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         msg = "📋 *قائمة المستخدمين المصرح لهم:*\n\n"
         for uid, username, created_at in rows:
+            # ✅ محاولة جلب الاسم من تيليجرام إذا كان غير موجود
+            if not username:
+                try:
+                    chat = await context.bot.get_chat(uid)
+                    if chat.username:
+                        username = chat.username
+                        # تحديث القاعدة
+                        with get_db() as conn:
+                            with conn.cursor() as cur:
+                                cur.execute("UPDATE authorized_users SET username = %s WHERE user_id = %s", (username, uid))
+                            conn.commit()
+                except Exception as e:
+                    logger.warning(f"Could not fetch info for {uid}: {e}")
+
             user_link = f"@{username}" if username else "بدون معرف"
             date_str = created_at.strftime("%Y-%m-%d") if created_at else "?"
             msg += f"👤 `{uid}` - {user_link}\n📅 {date_str}\n\n"
@@ -190,6 +204,15 @@ exchange = ccxt.binance({
 
 # ✅ قائمة العملات المتابعة
 WATCHLIST = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "PEPE/USDT", "ADA/USDT"]
+
+# ✅ متغير لتتبع طلبات الإيقاف
+STOP_SIGNALS = {}
+
+async def stop_execution(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """إيقاف العمليات الجارية"""
+    user_id = update.effective_user.id
+    STOP_SIGNALS[user_id] = True
+    await update.message.reply_text("🛑 تم طلب إيقاف العمليات الجارية...")
 
 # ✅ Cache للأسواق (يتم تحديثه كل 5 دقائق)
 @lru_cache(maxsize=1)
@@ -614,11 +637,19 @@ async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text("🚀 جاري تحليل أكثر العملات تحركاً خلال 24 ساعة...")
 
+    user_id = update.effective_user.id
+    STOP_SIGNALS[user_id] = False
+
     movers: List[Tuple[str, float]] = []
     symbols = get_symbols()
 
     # ✅ جلب البيانات مرة واحدة فقط
     for symbol in symbols:
+        # ✅ التحقق من طلب الإيقاف
+        if STOP_SIGNALS.get(user_id, False):
+            await update.message.reply_text("🛑 تم إيقاف التحليل.")
+            return
+
         try:
             df = get_ohlcv(symbol)
             change = ((df['close'].iloc[-1] - df['close'].iloc[0]) / df['close'].iloc[0]) * 100
@@ -688,10 +719,18 @@ async def silent_moves(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text("🔍 نبحث عن ضخ سيولة بدون حركة سعر...")
 
+    user_id = update.effective_user.id
+    STOP_SIGNALS[user_id] = False
+
     matches = False
     symbols = get_symbols()
 
     for symbol in symbols:
+        # ✅ التحقق من طلب الإيقاف
+        if STOP_SIGNALS.get(user_id, False):
+            await update.message.reply_text("🛑 تم إيقاف البحث.")
+            return
+
         try:
             df = get_ohlcv(symbol)
 
@@ -770,11 +809,19 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text("🔎 جاري فحص السوق بحثًا عن فرص مؤكدة وغير مؤكدة...")
 
+    user_id = update.effective_user.id
+    STOP_SIGNALS[user_id] = False  # ✅ إعادة تعيين إشارة التوقف
+
     found = False
     symbols = get_symbols()
     max_results = 20  # ✅ حد أقصى للنتائج لتجنب spam
 
     for symbol in symbols:
+        # ✅ التحقق من طلب الإيقاف
+        if STOP_SIGNALS.get(user_id, False):
+            await update.message.reply_text("🛑 تم إيقاف الفحص بناءً على طلبك.")
+            return
+
         if found and len([x for x in [True] if found]) >= max_results:
             break
             
@@ -946,6 +993,9 @@ async def signals_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text("🔍 جاري فحص السوق للبحث عن أفضل إشارات الشراء...")
     
+    user_id = update.effective_user.id
+    STOP_SIGNALS[user_id] = False
+
     try:
         markets = exchange.load_markets()
         symbols = [s['symbol'] for s in markets.values() 
@@ -954,6 +1004,11 @@ async def signals_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         signals_found = []
         
         for symbol in symbols:
+            # ✅ التحقق من طلب الإيقاف
+            if STOP_SIGNALS.get(user_id, False):
+                await update.message.reply_text("🛑 تم إيقاف فحص الإشارات.")
+                return
+
             try:
                 df = get_ohlcv(symbol, timeframe='1h', limit=100)
                 indicators = calculate_advanced_indicators(df)
@@ -1096,6 +1151,7 @@ async def setup_commands(app: Application):
         BotCommand("top", "أكثر العملات تحركاً"),
         BotCommand("silent_moves", "ضخ سيولة بدون تحرك سعر"),
         BotCommand("watchlist", "تحليل قائمة العملات الخاصة"),
+        BotCommand("stop", "إيقاف العمليات الجارية 🛑"),
         BotCommand("help", "عرض المساعدة"),
     ])
 
@@ -1121,6 +1177,7 @@ def main():
     app.add_handler(CommandHandler("auth", auth_user))
     app.add_handler(CommandHandler("unauth", unauth_user))
     app.add_handler(CommandHandler("users", list_users))
+    app.add_handler(CommandHandler("stop", stop_execution))
     app.add_handler(CommandHandler("help", help_command))
     
     logger.info("✅ البوت يعمل الآن...")
