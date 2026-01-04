@@ -361,6 +361,132 @@ def calculate_advanced_indicators(df: pd.DataFrame) -> dict:
     
     return indicators
 
+def is_good_trading_opportunity(signal: TradingSignal, indicators: dict, min_volume_ratio: float = 1.0, min_risk_reward: float = 1.2) -> Tuple[bool, List[str]]:
+    """التحقق من جودة فرصة التداول"""
+    warnings = []
+    is_good = True
+    
+    # ✅ التحقق من حجم التداول
+    volume_ratio = indicators.get('Volume_Ratio', 1.0)
+    if volume_ratio < min_volume_ratio:
+        is_good = False
+        warnings.append(f"⚠️ حجم تداول منخفض ({volume_ratio:.2f}x) - قد تكون السيولة قليلة")
+    
+    # ✅ التحقق من Risk/Reward
+    if signal.risk_reward < min_risk_reward:
+        is_good = False
+        warnings.append(f"⚠️ Risk/Reward ضعيف (1:{signal.risk_reward:.2f}) - يجب أن يكون على الأقل 1:{min_risk_reward}")
+    
+    # ✅ التحقق من الاتجاه العام (لإشارات الشراء)
+    if signal.signal_type in [SignalType.STRONG_BUY, SignalType.BUY, SignalType.WEAK_BUY]:
+        ema_200 = indicators.get('EMA_200', indicators['Price'])
+        if indicators['Price'] < ema_200:
+            warnings.append("🟡 تحذير: السعر تحت EMA200 (اتجاه هابط عام) - كن حذراً")
+    
+    # ✅ التحقق من التقلبات
+    bb_width = indicators.get('BB_Width', 0)
+    if bb_width > 8:
+        warnings.append(f"⚠️ تقلبات عالية جداً ({bb_width:.2f}%) - مخاطرة عالية")
+    
+    # ✅ التحقق من قوة الاتجاه
+    adx = indicators.get('ADX', 0)
+    if adx < 20 and signal.signal_type not in [SignalType.HOLD]:
+        warnings.append("🟡 ADX < 20 - الاتجاه ضعيف، قد يكون هناك تقلبات")
+    
+    return is_good, warnings
+
+def calculate_guarantee_level(signal: TradingSignal, indicators: dict) -> Tuple[str, float]:
+    """
+    حساب مستوى الضمان للفرصة (من 0 إلى 100)
+    Returns: (level_name, score)
+    """
+    score = 0
+    max_score = 100
+    
+    # ✅ الثقة الأساسية (30 نقطة)
+    score += (signal.confidence / 100) * 30
+    
+    # ✅ Risk/Reward (25 نقطة)
+    if signal.risk_reward >= 3.0:
+        score += 25
+    elif signal.risk_reward >= 2.0:
+        score += 20
+    elif signal.risk_reward >= 1.5:
+        score += 15
+    elif signal.risk_reward >= 1.2:
+        score += 10
+    else:
+        score += 5
+    
+    # ✅ حجم التداول (15 نقطة)
+    volume_ratio = indicators.get('Volume_Ratio', 1.0)
+    if volume_ratio >= 2.0:
+        score += 15
+    elif volume_ratio >= 1.5:
+        score += 12
+    elif volume_ratio >= 1.0:
+        score += 8
+    else:
+        score += 3
+    
+    # ✅ قوة الاتجاه - ADX (15 نقطة)
+    adx = indicators.get('ADX', 0)
+    if adx >= 40:
+        score += 15
+    elif adx >= 30:
+        score += 12
+    elif adx >= 25:
+        score += 8
+    elif adx >= 20:
+        score += 5
+    else:
+        score += 2
+    
+    # ✅ الاتجاه العام - EMA200 (10 نقطة)
+    ema_200 = indicators.get('EMA_200', indicators['Price'])
+    if signal.signal_type in [SignalType.STRONG_BUY, SignalType.BUY]:
+        if indicators['Price'] > ema_200:
+            score += 10
+        else:
+            score += 3
+    elif signal.signal_type in [SignalType.STRONG_SELL, SignalType.SELL]:
+        if indicators['Price'] < ema_200:
+            score += 10
+        else:
+            score += 3
+    
+    # ✅ التقلبات - BB Width (5 نقطة)
+    bb_width = indicators.get('BB_Width', 0)
+    if bb_width <= 3:
+        score += 5
+    elif bb_width <= 5:
+        score += 3
+    elif bb_width <= 8:
+        score += 1
+    # إذا كان > 8، لا نضيف نقاط
+    
+    # ✅ نوع الإشارة (10 نقطة)
+    if signal.signal_type == SignalType.STRONG_BUY or signal.signal_type == SignalType.STRONG_SELL:
+        score += 10
+    elif signal.signal_type == SignalType.BUY or signal.signal_type == SignalType.SELL:
+        score += 7
+    elif signal.signal_type == SignalType.WEAK_BUY or signal.signal_type == SignalType.WEAK_SELL:
+        score += 3
+    
+    # ✅ تحديد المستوى
+    if score >= 80:
+        level = "🟢 مضمون جداً"
+    elif score >= 65:
+        level = "🟢 مضمون"
+    elif score >= 50:
+        level = "🟡 جيد"
+    elif score >= 35:
+        level = "🟡 متوسط"
+    else:
+        level = "🔴 محفوف بالمخاطر"
+    
+    return level, min(100, score)
+
 def analyze_professional_signal(df: pd.DataFrame, indicators: dict) -> TradingSignal:
     """تحليل احترافي وإنتاج إشارة تداول"""
     price = indicators['Price']
@@ -809,9 +935,9 @@ async def watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = "📡 إشارات من قائمتك:\n\n" + "\n".join(signals) if signals else "📭 لا توجد إشارات حالياً."
     await update.message.reply_text(msg)
 
-# ✅ /scan - فحص السوق للفرص
+# ✅ /scan - فحص السوق للفرص (محسّن)
 async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """فحص السوق للفرص"""
+    """فحص السوق للفرص باستخدام نظام الإشارات الاحترافي"""
     if not update.message:
         return
 
@@ -819,92 +945,160 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth(update):
         return
     
-    await update.message.reply_text("🔎 جاري فحص السوق بحثًا عن فرص مؤكدة وغير مؤكدة...")
+    await update.message.reply_text("🔎 جاري فحص السوق بحثًا عن أفضل الفرص...\n⏳ قد يستغرق هذا بضع دقائق...")
 
     user_id = update.effective_user.id
-    STOP_SIGNALS[user_id] = False  # ✅ إعادة تعيين إشارة التوقف
+    STOP_SIGNALS[user_id] = False
 
-    found = False
-    symbols = get_symbols()
-    max_results = 20  # ✅ حد أقصى للنتائج لتجنب spam
+    try:
+        symbols = get_symbols()[:150]  # فحص أول 150 عملة (للأداء)
+        
+        signals_found = []
+        processed = 0
+        
+        for symbol in symbols:
+            # ✅ التحقق من طلب الإيقاف
+            if STOP_SIGNALS.get(user_id, False):
+                await update.message.reply_text("🛑 تم إيقاف الفحص بناءً على طلبك.")
+                return
 
-    for symbol in symbols:
-        # ✅ التحقق من طلب الإيقاف
-        if STOP_SIGNALS.get(user_id, False):
-            await update.message.reply_text("🛑 تم إيقاف الفحص بناءً على طلبك.")
-            return
-
-        if found and len([x for x in [True] if found]) >= max_results:
-            break
+            try:
+                # ✅ استخدام نظام الإشارات الاحترافي
+                df = get_ohlcv(symbol, timeframe='1h', limit=200)
+                indicators = calculate_advanced_indicators(df)
+                signal = analyze_professional_signal(df, indicators)
+                
+                # ✅ فقط الإشارات القوية والمتوسطة (ليس WEAK أو HOLD)
+                if signal.signal_type in [
+                    SignalType.STRONG_BUY, SignalType.BUY,
+                    SignalType.STRONG_SELL, SignalType.SELL
+                ]:
+                    # ✅ التحقق من جودة الفرصة
+                    is_good, warnings = is_good_trading_opportunity(
+                        signal, indicators,
+                        min_volume_ratio=0.6,  # أقل صرامة للفحص الشامل
+                        min_risk_reward=0.9   # أقل صرامة للفحص الشامل
+                    )
+                    
+                    # ✅ حساب مستوى الضمان
+                    guarantee_level, guarantee_score = calculate_guarantee_level(signal, indicators)
+                    
+                    # ✅ فلترة: فقط الفرص التي مستوى ضمانها جيد أو أفضل (score >= 45)
+                    if guarantee_score >= 45:
+                        # ✅ تحديد نوع الفرصة
+                        if signal.signal_type in [SignalType.STRONG_BUY, SignalType.STRONG_SELL]:
+                            opportunity_type = "✅ إشارة مؤكدة"
+                        elif signal.signal_type in [SignalType.BUY, SignalType.SELL]:
+                            opportunity_type = "📊 إشارة جيدة"
+                        else:
+                            opportunity_type = "📢 إشارة مبكرة"
+                        
+                        # ✅ جلب معلومات إضافية
+                        ticker = exchange.fetch_ticker(symbol)
+                        change_24h = ticker['percentage']
+                        volume_24h = ticker.get('quoteVolume', 0)
+                        
+                        # ✅ حساب نقاط الجودة (Quality Score)
+                        quality_score = guarantee_score
+                        if signal.risk_reward >= 2.0:
+                            quality_score += 5
+                        if indicators.get('Volume_Ratio', 1) >= 1.5:
+                            quality_score += 3
+                        if is_good:
+                            quality_score += 5
+                        
+                        signals_found.append((
+                            symbol, signal, indicators, quality_score,
+                            is_good, warnings, guarantee_level, guarantee_score,
+                            opportunity_type, change_24h, volume_24h
+                        ))
+                        
+            except Exception as e:
+                logger.debug(f"خطأ في {symbol}: {e}")
+                continue
             
-        try:
-            df = get_ohlcv(symbol)
-
-            # الأسعار
-            price_now = df['close'].iloc[-1]
-            price_prev = df['close'].iloc[-2]
-            price_change = ((price_now - price_prev) / price_prev) * 100
-
-            # الأحجام
-            volume_now = df['volume'].iloc[-1]
-            volume_avg = df['volume'][:-1].mean()
-            volume_change = ((volume_now - volume_avg) / volume_avg) * 100
-
-            # المؤشرات الفنية
-            rsi = ta.momentum.RSIIndicator(close=df['close']).rsi().iloc[-1]
-            ema9 = ta.trend.EMAIndicator(close=df['close'], window=9).ema_indicator().iloc[-1]
-            ema21 = ta.trend.EMAIndicator(close=df['close'], window=21).ema_indicator().iloc[-1]
-            macd_hist = ta.trend.MACD(close=df['close']).macd_diff().iloc[-1]
-            if pd.isna(macd_hist):
-                macd_hist = 0.0
-            resistance_broken = price_now > df['high'].iloc[-2]
-
-            # القيمة بالدولار
-            df['value'] = df['close'] * df['volume']
-            usd_volume_24h = df['value'][:-1].sum()
-            ticker = exchange.fetch_ticker(symbol)
-            change_24h = ticker['percentage']
-            highest_price = ticker['high']
-
-            # ========== ✅ إشارة مؤكدة ==========
-            if (
-                volume_now > volume_avg * 3 and
-                resistance_broken and
-                ema9 > ema21
-            ):
-                msg = f"""✅ إشارة مؤكدة ({symbol})
-💸 السعر: {price_now:.4f}
-💸 أعلى سعر: {highest_price:.4f}
-📈 تغير الساعة: {price_change:.2f}%
-📊 تغير السعر 24ساعة: {change_24h:.2f}%
-📉 RSI: {rsi:.2f}
-📈 EMA9 > EMA21 ✅
-📈 كسر مقاومة ✅
-💰 حجم التداول بالدولار (24h): ${usd_volume_24h:,.2f}
-"""
-                await update.message.reply_text(msg)
-                found = True
-
-            # ========== 📢 إشارة مبكرة ==========
-            elif price_change > 3 or volume_change > 100:
-                msg = f"""📢 تنبيه مبكر ({symbol})
-💸 السعر: {price_now:.4f}
-💸 أعلى سعر: {highest_price:.4f}
-📈 تغير الساعة: {price_change:.2f}%  
-📊 تغير السعر 24ساعة: {change_24h:.2f}%
-📉 RSI: {rsi:.2f}
-📊 MACD Histogram: {macd_hist:.4f}
-💰 حجم التداول بالدولار (24h): ${usd_volume_24h:,.2f}
-"""
-                await update.message.reply_text(msg)
-                found = True
-
-        except Exception as e:
-            logger.debug(f"خطأ في {symbol}: {e}")
-            continue
-
-    if not found:
-        await update.message.reply_text("📭 لا توجد إشارات حالياً.")
+            processed += 1
+            if processed % 30 == 0:
+                await update.message.reply_text(f"⏳ تم فحص {processed} عملة...")
+        
+        if not signals_found:
+            await update.message.reply_text("📭 لا توجد إشارات قوية حالياً.\n💡 جرب الأمر /signals_scan للبحث عن فرص أخرى")
+            return
+        
+        # ✅ ترتيب حسب نقاط الجودة (الأفضل أولاً)
+        signals_found.sort(key=lambda x: x[3], reverse=True)
+        signals_found = signals_found[:25]  # أفضل 25
+        
+        # ✅ فصل إشارات الشراء والبيع
+        buy_signals = [s for s in signals_found if s[1].signal_type in [SignalType.STRONG_BUY, SignalType.BUY]]
+        sell_signals = [s for s in signals_found if s[1].signal_type in [SignalType.STRONG_SELL, SignalType.SELL]]
+        
+        # ✅ بناء الرسالة
+        msg = "🎯 *نتائج فحص السوق:*\n\n"
+        msg += f"📊 تم فحص {processed} عملة ووجدنا {len(signals_found)} فرصة جيدة\n"
+        msg += f"🟢 فرص شراء: {len(buy_signals)} | 🔴 فرص بيع: {len(sell_signals)}\n\n"
+        msg += "━━━━━━━━━━━━━━━━━━━━\n\n"
+        
+        # ✅ عرض فرص الشراء
+        if buy_signals:
+            msg += "🟢 *أفضل فرص الشراء:*\n\n"
+            for i, (symbol, signal, indicators, quality_score, is_good, warnings, 
+                    guarantee_level, guarantee_score, opportunity_type, change_24h, volume_24h) in enumerate(buy_signals[:12], 1):
+                
+                msg += f"{guarantee_level} *{i}. {symbol}*\n"
+                msg += f"   {opportunity_type} - {signal.signal_type.value}\n"
+                msg += f"   🎯 مستوى الضمان: {guarantee_score:.0f}/100\n"
+                msg += f"   💰 السعر: {signal.entry_price:,.4f} USDT\n"
+                msg += f"   📈 تغير 24س: {change_24h:.2f}%\n"
+                msg += f"   📊 Risk/Reward: 1:{signal.risk_reward:.2f} "
+                msg += f"{'✅ ممتاز' if signal.risk_reward >= 2.0 else '✅ جيد' if signal.risk_reward >= 1.5 else '⚠️ متوسط'}\n"
+                msg += f"   🛑 SL: {signal.stop_loss:,.4f} | ✅ TP2: {signal.take_profit_2:,.4f}\n"
+                msg += f"   📊 RSI: {indicators['RSI']:.2f} | ADX: {indicators['ADX']:.2f}\n\n"
+            
+            msg += "━━━━━━━━━━━━━━━━━━━━\n\n"
+        
+        # ✅ عرض فرص البيع
+        if sell_signals:
+            msg += "🔴 *أفضل فرص البيع:*\n\n"
+            for i, (symbol, signal, indicators, quality_score, is_good, warnings,
+                    guarantee_level, guarantee_score, opportunity_type, change_24h, volume_24h) in enumerate(sell_signals[:12], 1):
+                
+                msg += f"{guarantee_level} *{i}. {symbol}*\n"
+                msg += f"   {opportunity_type} - {signal.signal_type.value}\n"
+                msg += f"   🎯 مستوى الضمان: {guarantee_score:.0f}/100\n"
+                msg += f"   💰 السعر: {signal.entry_price:,.4f} USDT\n"
+                msg += f"   📈 تغير 24س: {change_24h:.2f}%\n"
+                msg += f"   📊 Risk/Reward: 1:{signal.risk_reward:.2f} "
+                msg += f"{'✅ ممتاز' if signal.risk_reward >= 2.0 else '✅ جيد' if signal.risk_reward >= 1.5 else '⚠️ متوسط'}\n"
+                msg += f"   🛑 SL: {signal.stop_loss:,.4f} | ✅ TP2: {signal.take_profit_2:,.4f}\n"
+                msg += f"   📊 RSI: {indicators['RSI']:.2f} | ADX: {indicators['ADX']:.2f}\n\n"
+        
+        msg += "━━━━━━━━━━━━━━━━━━━━\n"
+        msg += "💡 *نصائح للاستخدام:*\n"
+        msg += "• استخدم /signal [العملة] للحصول على تحليل مفصل\n"
+        msg += "• 🟢 مضمون جداً = فرصة ممتازة (80%+)\n"
+        msg += "• 🟢 مضمون = فرصة جيدة جداً (65%+)\n"
+        msg += "• 🟡 جيد = فرصة جيدة (50%+)\n"
+        msg += "• استخدم Stop Loss دائماً ولا تخاطر بأكثر من 2-5%\n"
+        msg += "• تحليل تقني فقط وليس نصيحة استثمارية"
+        
+        await update.message.reply_text(msg, parse_mode='Markdown')
+        
+        # ✅ إرسال أفضل الفرص المضمونة بشكل مفصل
+        high_guarantee = [s for s in signals_found if s[7] >= 75]  # مستوى ضمان 75%+
+        if high_guarantee:
+            msg_detail = "🟢 *أفضل الفرص المضمونة جداً:*\n\n"
+            for symbol, signal, indicators, quality_score, is_good, warnings, guarantee_level, guarantee_score, opportunity_type, change_24h, volume_24h in high_guarantee[:5]:
+                msg_detail += f"✅ *{symbol}* - {signal.signal_type.value}\n"
+                msg_detail += f"   مستوى الضمان: {guarantee_score:.0f}/100\n"
+                msg_detail += f"   السعر: {signal.entry_price:,.4f} | R/R: 1:{signal.risk_reward:.2f}\n"
+                msg_detail += f"   SL: {signal.stop_loss:,.4f} | TP2: {signal.take_profit_2:,.4f}\n\n"
+            msg_detail += "💡 استخدم /signal [العملة] للحصول على تحليل مفصل"
+            await update.message.reply_text(msg_detail, parse_mode='Markdown')
+        
+    except Exception as e:
+        logger.error(f"خطأ في /scan: {e}")
+        await update.message.reply_text(f"⚠️ خطأ: {str(e)}")
 
 # ✅ /signal - إشارة تداول احترافية مباشرة
 async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -933,59 +1127,135 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await update.message.reply_text(f"🔍 جاري تحليل {symbol}...")
         
-        df = get_ohlcv(symbol, timeframe='1h', limit=100)
+        df = get_ohlcv(symbol, timeframe='1h', limit=200)  # زيادة البيانات لتحليل أفضل
         indicators = calculate_advanced_indicators(df)
         signal = analyze_professional_signal(df, indicators)
         
+        # ✅ التحقق من جودة الفرصة
+        is_good, warnings = is_good_trading_opportunity(signal, indicators, min_volume_ratio=0.8, min_risk_reward=1.2)
+        
+        # ✅ حساب مستوى الضمان
+        guarantee_level, guarantee_score = calculate_guarantee_level(signal, indicators)
+        
         ticker = exchange.fetch_ticker(symbol)
         change_24h = ticker['percentage']
+        volume_24h = ticker['quoteVolume'] if 'quoteVolume' in ticker else 0
+        
+        # ✅ تحديد متى يشتري/يبيع بشكل واضح
+        action_advice = ""
+        if signal.signal_type in [SignalType.STRONG_BUY, SignalType.BUY]:
+            action_advice = f"""
+🟢 *متى تشتري:*
+• ✅ اشترِ الآن عند السعر: {signal.entry_price:,.4f} USDT
+• ✅ أو انتظر انخفاض بسيط إلى: {signal.entry_price * 0.995:,.4f} USDT (شراء أفضل)
+• ⚠️ لا تشتري إذا ارتفع السعر أكثر من 2% من سعر الدخول
+
+🛑 *متى تبيع (Stop Loss):*
+• ❌ بيع فوري إذا وصل السعر إلى: {signal.stop_loss:,.4f} USDT
+• 💰 هذا يحدد خسارتك القصوى
+
+✅ *متى تأخذ الربح:*
+• 🎯 TP1: {signal.take_profit_1:,.4f} USDT - بيع 30% من الكمية
+• 🎯 TP2: {signal.take_profit_2:,.4f} USDT - بيع 50% من الكمية  
+• 🎯 TP3: {signal.take_profit_3:,.4f} USDT - بيع 20% المتبقية"""
+        elif signal.signal_type == SignalType.WEAK_BUY:
+            action_advice = f"""
+🟡 *إشارة شراء ضعيفة:*
+• ⚠️ انتظر تأكيد إضافي قبل الشراء
+• 🔍 راقب السعر عند: {signal.entry_price:,.4f} USDT
+• ✅ اشترِ فقط إذا تحسنت المؤشرات"""
+        elif signal.signal_type in [SignalType.STRONG_SELL, SignalType.SELL]:
+            action_advice = f"""
+🔴 *متى تبيع:*
+• ✅ بيع الآن عند السعر: {signal.entry_price:,.4f} USDT
+• ✅ أو انتظر ارتفاع بسيط إلى: {signal.entry_price * 1.005:,.4f} USDT (بيع أفضل)
+• ⚠️ لا تبيع إذا انخفض السعر أكثر من 2% من سعر الدخول
+
+🛑 *متى تغلق (Stop Loss):*
+• ❌ إغلاق فوري إذا وصل السعر إلى: {signal.stop_loss:,.4f} USDT
+• 💰 هذا يحدد خسارتك القصوى"""
+        elif signal.signal_type == SignalType.WEAK_SELL:
+            action_advice = f"""
+🟡 *إشارة بيع ضعيفة:*
+• ⚠️ انتظر تأكيد إضافي قبل البيع
+• 🔍 راقب السعر عند: {signal.entry_price:,.4f} USDT"""
+        else:
+            action_advice = """
+⚪ *لا توجد إشارة واضحة:*
+• ⏸️ انتظر حتى تظهر إشارة أوضح
+• 🔍 راقب السوق ولا تتداول الآن"""
+        
+        # ✅ تحليل الاتجاه العام
+        ema_200 = indicators.get('EMA_200', indicators['Price'])
+        trend_analysis = ""
+        if indicators['Price'] > ema_200:
+            trend_analysis = "📈 *الاتجاه العام: صاعد* (السعر فوق EMA200)"
+        else:
+            trend_analysis = "📉 *الاتجاه العام: هابط* (السعر تحت EMA200)"
         
         msg = f"""
 🎯 *إشارة تداول احترافية - {symbol}*
 
 ━━━━━━━━━━━━━━━━━━━━
 📊 *الإشارة: {signal.signal_type.value}*
-🎯 *الثقة: {signal.confidence:.1f}%*
+🎯 *مستوى الثقة: {signal.confidence:.1f}%*
+🛡️ *مستوى الضمان: {guarantee_level} ({guarantee_score:.0f}/100)*
+{'✅ فرصة جيدة' if is_good else '⚠️ فرصة تحتاج حذر'}
 
 ━━━━━━━━━━━━━━━━━━━━
 💰 *السعر الحالي:* {indicators['Price']:,.4f} USDT
 📈 *تغير 24س:* {change_24h:.2f}%
+💵 *حجم التداول 24س:* ${volume_24h:,.0f} USDT
+{trend_analysis}
 
 ━━━━━━━━━━━━━━━━━━━━
-🎯 *نقاط الدخول والخروج:*
-
-📍 *سعر الدخول:* {signal.entry_price:,.4f} USDT
-🛑 *Stop Loss:* {signal.stop_loss:,.4f} USDT
-   (خسارة: {abs((signal.stop_loss - signal.entry_price) / signal.entry_price * 100):.2f}%)
-
-✅ *Take Profit 1:* {signal.take_profit_1:,.4f} USDT
-   (ربح: {abs((signal.take_profit_1 - signal.entry_price) / signal.entry_price * 100):.2f}%)
-
-✅ *Take Profit 2:* {signal.take_profit_2:,.4f} USDT
-   (ربح: {abs((signal.take_profit_2 - signal.entry_price) / signal.entry_price * 100):.2f}%)
-
-✅ *Take Profit 3:* {signal.take_profit_3:,.4f} USDT
-   (ربح: {abs((signal.take_profit_3 - signal.entry_price) / signal.entry_price * 100):.2f}%)
-
-📊 *Risk/Reward:* 1:{signal.risk_reward:.2f}
+{action_advice}
 
 ━━━━━━━━━━━━━━━━━━━━
-📈 *المؤشرات:*
-• RSI: {indicators['RSI']:.2f}
-• MACD: {indicators['MACD']:.4f} (Signal: {indicators['MACD_Signal']:.4f})
-• ADX: {indicators['ADX']:.2f} (قوة الاتجاه)
+📊 *المؤشرات الفنية:*
+• RSI: {indicators['RSI']:.2f} {'(ذروة بيع)' if indicators['RSI'] < 30 else '(ذروة شراء)' if indicators['RSI'] > 70 else ''}
+• MACD: {indicators['MACD']:.4f} | Signal: {indicators['MACD_Signal']:.4f}
+• ADX: {indicators['ADX']:.2f} {'(اتجاه قوي)' if indicators['ADX'] > 25 else '(اتجاه ضعيف)'}
 • EMA9: {indicators['EMA_9']:,.4f}
 • EMA21: {indicators['EMA_21']:,.4f}
 • EMA50: {indicators['EMA_50']:,.4f}
-• Volume Ratio: {indicators['Volume_Ratio']:.2f}x
+• EMA200: {indicators['EMA_200']:,.4f}
+• Volume Ratio: {indicators['Volume_Ratio']:.2f}x {'(حجم عالي)' if indicators['Volume_Ratio'] > 1.5 else '(حجم عادي)'}
+• Support: {indicators['Support']:,.4f} | Resistance: {indicators['Resistance']:,.4f}
 
 ━━━━━━━━━━━━━━━━━━━━
-💡 *التحليل:*
+📊 *نقاط الدخول والخروج:*
+📍 *سعر الدخول:* {signal.entry_price:,.4f} USDT
+🛑 *Stop Loss:* {signal.stop_loss:,.4f} USDT
+   (خسارة محتملة: {abs((signal.stop_loss - signal.entry_price) / signal.entry_price * 100):.2f}%)
+
+✅ *Take Profit 1:* {signal.take_profit_1:,.4f} USDT
+   (ربح: +{abs((signal.take_profit_1 - signal.entry_price) / signal.entry_price * 100):.2f}%)
+
+✅ *Take Profit 2:* {signal.take_profit_2:,.4f} USDT
+   (ربح: +{abs((signal.take_profit_2 - signal.entry_price) / signal.entry_price * 100):.2f}%)
+
+✅ *Take Profit 3:* {signal.take_profit_3:,.4f} USDT
+   (ربح: +{abs((signal.take_profit_3 - signal.entry_price) / signal.entry_price * 100):.2f}%)
+
+📊 *Risk/Reward Ratio:* 1:{signal.risk_reward:.2f}
+{'✅ جيد' if signal.risk_reward >= 1.5 else '⚠️ متوسط' if signal.risk_reward >= 1.2 else '❌ ضعيف'}
+
+━━━━━━━━━━━━━━━━━━━━
+💡 *التحليل التفصيلي:*
 """
         for reason in signal.reasoning:
             msg += f"{reason}\n"
         
-        msg += "\n⚠️ *تحذير:* تحليل تقني فقط وليس نصيحة استثمارية"
+        # ✅ إضافة التحذيرات
+        if warnings:
+            msg += "\n━━━━━━━━━━━━━━━━━━━━\n⚠️ *تحذيرات مهمة:*\n"
+            for warning in warnings:
+                msg += f"{warning}\n"
+        
+        msg += "\n━━━━━━━━━━━━━━━━━━━━\n"
+        msg += "⚠️ *تحذير:* تحليل تقني فقط وليس نصيحة استثمارية\n"
+        msg += "💡 *نصيحة:* استخدم Stop Loss دائماً ولا تخاطر بأكثر من 2-5% من رأس المال"
         
         await update.message.reply_text(msg, parse_mode='Markdown')
         
@@ -1003,17 +1273,24 @@ async def signals_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth(update):
         return
     
-    await update.message.reply_text("🔍 جاري فحص السوق للبحث عن أفضل إشارات الشراء...")
+    await update.message.reply_text("🔍 جاري فحص السوق للبحث عن أفضل فرص الشراء والبيع...\n⏳ قد يستغرق هذا بضع دقائق...")
     
     user_id = update.effective_user.id
     STOP_SIGNALS[user_id] = False
 
     try:
         markets = exchange.load_markets()
-        symbols = [s['symbol'] for s in markets.values() 
-                  if s['quote'] == 'USDT' and s['spot'] and s['active']][:50]  # أول 50 عملة
+        # ✅ فلترة أفضل: العملات بحجم تداول عالي أولاً
+        all_symbols = [
+            s for s in markets.values() 
+            if s['quote'] == 'USDT' and s['spot'] and s['active']
+        ]
+        
+        # ✅ ترتيب حسب حجم التداول (إن أمكن) أو أخذ أول 100 عملة
+        symbols = [s['symbol'] for s in all_symbols[:100]]
         
         signals_found = []
+        processed = 0
         
         for symbol in symbols:
             # ✅ التحقق من طلب الإيقاف
@@ -1022,33 +1299,119 @@ async def signals_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
             try:
-                df = get_ohlcv(symbol, timeframe='1h', limit=100)
+                df = get_ohlcv(symbol, timeframe='1h', limit=200)
                 indicators = calculate_advanced_indicators(df)
                 signal = analyze_professional_signal(df, indicators)
                 
-                # فقط إشارات شراء قوية أو متوسطة
-                if signal.signal_type in [SignalType.STRONG_BUY, SignalType.BUY]:
-                    signals_found.append((symbol, signal))
+                # ✅ إشارات شراء وبيع قوية أو متوسطة
+                if signal.signal_type in [SignalType.STRONG_BUY, SignalType.BUY, SignalType.STRONG_SELL, SignalType.SELL]:
+                    # ✅ التحقق من جودة الفرصة
+                    is_good, warnings = is_good_trading_opportunity(
+                        signal, indicators, 
+                        min_volume_ratio=0.7,  # أقل صرامة للفحص الشامل
+                        min_risk_reward=1.0   # أقل صرامة للفحص الشامل
+                    )
+                    
+                    # ✅ حساب مستوى الضمان
+                    guarantee_level, guarantee_score = calculate_guarantee_level(signal, indicators)
+                    
+                    # ✅ فلترة: فقط الفرص التي مستوى ضمانها جيد أو أفضل (score >= 50)
+                    if guarantee_score >= 50:
+                        # ✅ حساب نقاط الجودة (Score) - استخدام مستوى الضمان
+                        quality_score = guarantee_score
+                        
+                        # ✅ إضافة نقاط إضافية للجودة
+                        if signal.risk_reward >= 2.0:
+                            quality_score += 5
+                        
+                        if indicators.get('Volume_Ratio', 1) >= 1.5:
+                            quality_score += 3
+                        
+                        if indicators['Price'] > indicators.get('EMA_200', indicators['Price']) and signal.signal_type in [SignalType.STRONG_BUY, SignalType.BUY]:
+                            quality_score += 3
+                        elif indicators['Price'] < indicators.get('EMA_200', indicators['Price']) and signal.signal_type in [SignalType.STRONG_SELL, SignalType.SELL]:
+                            quality_score += 3
+                        
+                        if is_good:
+                            quality_score += 5
+                        
+                        signals_found.append((symbol, signal, indicators, quality_score, is_good, warnings, guarantee_level, guarantee_score))
                     
             except Exception as e:
                 logger.debug(f"خطأ في {symbol}: {e}")
                 continue
-        
-        # ترتيب حسب الثقة
-        signals_found.sort(key=lambda x: x[1].confidence, reverse=True)
-        signals_found = signals_found[:10]  # أفضل 10
+            
+            processed += 1
+            if processed % 20 == 0:
+                await update.message.reply_text(f"⏳ تم فحص {processed} عملة...")
         
         if not signals_found:
-            await update.message.reply_text("❌ لا توجد إشارات شراء قوية حالياً.")
+            await update.message.reply_text("❌ لا توجد إشارات قوية حالياً.\n💡 جرب الأمر /scan للبحث عن فرص أخرى")
             return
         
-        msg = "🎯 *أفضل إشارات الشراء:*\n\n"
-        for i, (symbol, signal) in enumerate(signals_found, 1):
-            msg += f"{i}. *{symbol}* - {signal.signal_type.value}\n"
-            msg += f"   الثقة: {signal.confidence:.1f}% | السعر: {signal.entry_price:,.4f}\n"
-            msg += f"   SL: {signal.stop_loss:,.4f} | TP2: {signal.take_profit_2:,.4f}\n\n"
+        # ✅ ترتيب حسب نقاط الجودة (Quality Score) - الأفضل أولاً
+        signals_found.sort(key=lambda x: x[3], reverse=True)
+        signals_found = signals_found[:20]  # أفضل 20
+        
+        # ✅ فصل إشارات الشراء والبيع
+        buy_signals = [s for s in signals_found if s[1].signal_type in [SignalType.STRONG_BUY, SignalType.BUY]]
+        sell_signals = [s for s in signals_found if s[1].signal_type in [SignalType.STRONG_SELL, SignalType.SELL]]
+        
+        # ✅ تقسيم الرسائل
+        msg = "🎯 *أفضل فرص التداول في السوق:*\n\n"
+        msg += f"📊 تم فحص {processed} عملة ووجدنا {len(signals_found)} فرصة جيدة\n"
+        msg += f"🟢 فرص شراء: {len(buy_signals)} | 🔴 فرص بيع: {len(sell_signals)}\n\n"
+        msg += "━━━━━━━━━━━━━━━━━━━━\n\n"
+        
+        # ✅ عرض فرص الشراء أولاً
+        if buy_signals:
+            msg += "🟢 *أفضل فرص الشراء:*\n\n"
+            for i, (symbol, signal, indicators, quality_score, is_good, warnings, guarantee_level, guarantee_score) in enumerate(buy_signals[:8], 1):
+                msg += f"{guarantee_level} *{i}. {symbol}*\n"
+                msg += f"   📊 الإشارة: {signal.signal_type.value}\n"
+                msg += f"   🎯 مستوى الضمان: {guarantee_score:.0f}/100\n"
+                msg += f"   💰 السعر: {signal.entry_price:,.4f} USDT\n"
+                msg += f"   📈 تغير 24س: {indicators.get('Price_Change_24h', 0):.2f}%\n"
+                msg += f"   📊 Risk/Reward: 1:{signal.risk_reward:.2f} "
+                msg += f"{'✅ ممتاز' if signal.risk_reward >= 2.0 else '✅ جيد' if signal.risk_reward >= 1.5 else '⚠️ متوسط'}\n"
+                msg += f"   🛑 SL: {signal.stop_loss:,.4f} | ✅ TP2: {signal.take_profit_2:,.4f}\n\n"
+            
+            msg += "━━━━━━━━━━━━━━━━━━━━\n\n"
+        
+        # ✅ عرض فرص البيع
+        if sell_signals:
+            msg += "🔴 *أفضل فرص البيع:*\n\n"
+            for i, (symbol, signal, indicators, quality_score, is_good, warnings, guarantee_level, guarantee_score) in enumerate(sell_signals[:8], 1):
+                msg += f"{guarantee_level} *{i}. {symbol}*\n"
+                msg += f"   📊 الإشارة: {signal.signal_type.value}\n"
+                msg += f"   🎯 مستوى الضمان: {guarantee_score:.0f}/100\n"
+                msg += f"   💰 السعر: {signal.entry_price:,.4f} USDT\n"
+                msg += f"   📈 تغير 24س: {indicators.get('Price_Change_24h', 0):.2f}%\n"
+                msg += f"   📊 Risk/Reward: 1:{signal.risk_reward:.2f} "
+                msg += f"{'✅ ممتاز' if signal.risk_reward >= 2.0 else '✅ جيد' if signal.risk_reward >= 1.5 else '⚠️ متوسط'}\n"
+                msg += f"   🛑 SL: {signal.stop_loss:,.4f} | ✅ TP2: {signal.take_profit_2:,.4f}\n\n"
+        
+        msg += "━━━━━━━━━━━━━━━━━━━━\n"
+        msg += "💡 *نصائح للاستخدام:*\n"
+        msg += "• استخدم /signal [العملة] للحصول على تحليل مفصل\n"
+        msg += "• 🟢 مضمون جداً = فرصة ممتازة (80%+)\n"
+        msg += "• 🟢 مضمون = فرصة جيدة جداً (65%+)\n"
+        msg += "• 🟡 جيد = فرصة جيدة (50%+)\n"
+        msg += "• استخدم Stop Loss دائماً ولا تخاطر بأكثر من 2-5%\n"
+        msg += "• تحليل تقني فقط وليس نصيحة استثمارية"
         
         await update.message.reply_text(msg, parse_mode='Markdown')
+        
+        # ✅ إرسال أفضل الفرص المضمونة بشكل مفصل
+        high_guarantee = [s for s in signals_found if s[7] >= 80]  # مستوى ضمان 80%+
+        if high_guarantee:
+            msg_detail = "🟢 *أفضل الفرص المضمونة جداً:*\n\n"
+            for symbol, signal, indicators, quality_score, is_good, warnings, guarantee_level, guarantee_score in high_guarantee[:5]:
+                msg_detail += f"✅ *{symbol}* - {signal.signal_type.value}\n"
+                msg_detail += f"   مستوى الضمان: {guarantee_score:.0f}/100\n"
+                msg_detail += f"   السعر: {signal.entry_price:,.4f} | R/R: 1:{signal.risk_reward:.2f}\n\n"
+            msg_detail += "💡 استخدم /signal [العملة] للحصول على تحليل مفصل"
+            await update.message.reply_text(msg_detail, parse_mode='Markdown')
         
     except Exception as e:
         logger.error(f"خطأ في /signals_scan: {e}")
