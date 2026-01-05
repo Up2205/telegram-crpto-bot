@@ -359,18 +359,35 @@ def calculate_advanced_indicators(df: pd.DataFrame) -> dict:
     indicators['Support'] = low.tail(20).min()
     indicators['Resistance'] = high.tail(20).max()
     
+    # ✅ حجم التداول 24 ساعة بالدولار (سيتم تحديثه من ticker في الدوال)
+    indicators['Volume_24h_USD'] = 0  # سيتم تحديثه لاحقاً
+    
     return indicators
 
-def is_good_trading_opportunity(signal: TradingSignal, indicators: dict, min_volume_ratio: float = 1.0, min_risk_reward: float = 1.2) -> Tuple[bool, List[str]]:
-    """التحقق من جودة فرصة التداول"""
+def is_good_trading_opportunity(signal: TradingSignal, indicators: dict, min_volume_ratio: float = 1.0, min_risk_reward: float = 1.2, max_volatility: float = 7.0, min_volume_24h: float = 500000) -> Tuple[bool, List[str]]:
+    """
+    التحقق من جودة فرصة التداول
+    
+    Parameters:
+    - min_volume_ratio: الحد الأدنى لنسبة الحجم (Volume_Ratio)
+    - min_risk_reward: الحد الأدنى لـ Risk/Reward
+    - max_volatility: الحد الأقصى للتقلبات (BB_Width) - القيم الأعلى = تقلبات أكبر
+    - min_volume_24h: الحد الأدنى لحجم التداول 24 ساعة بالدولار (افتراضي: $500K)
+    """
     warnings = []
     is_good = True
     
-    # ✅ التحقق من حجم التداول
+    # ✅ التحقق من حجم التداول (Volume_Ratio)
     volume_ratio = indicators.get('Volume_Ratio', 1.0)
     if volume_ratio < min_volume_ratio:
         is_good = False
         warnings.append(f"⚠️ حجم تداول منخفض ({volume_ratio:.2f}x) - قد تكون السيولة قليلة")
+    
+    # ✅ التحقق من حجم التداول المطلق (24 ساعة)
+    volume_24h = indicators.get('Volume_24h_USD', 0)
+    if volume_24h > 0 and volume_24h < min_volume_24h:
+        is_good = False
+        warnings.append(f"⚠️ حجم تداول مطلق منخفض (${volume_24h:,.0f}) - سيولة قليلة، قد يكون صعب البيع/الشراء")
     
     # ✅ التحقق من Risk/Reward
     if signal.risk_reward < min_risk_reward:
@@ -383,10 +400,11 @@ def is_good_trading_opportunity(signal: TradingSignal, indicators: dict, min_vol
         if indicators['Price'] < ema_200:
             warnings.append("🟡 تحذير: السعر تحت EMA200 (اتجاه هابط عام) - كن حذراً")
     
-    # ✅ التحقق من التقلبات
+    # ✅ التحقق من التقلبات (BB_Width) - الأهم!
     bb_width = indicators.get('BB_Width', 0)
-    if bb_width > 8:
-        warnings.append(f"⚠️ تقلبات عالية جداً ({bb_width:.2f}%) - مخاطرة عالية")
+    if bb_width > max_volatility:
+        is_good = False
+        warnings.append(f"❌ تقلبات عالية جداً ({bb_width:.2f}%) - مخاطرة عالية جداً، تم استبعادها")
     
     # ✅ التحقق من قوة الاتجاه
     adx = indicators.get('ADX', 0)
@@ -955,12 +973,12 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         signals_found = []
         processed = 0
-        
-        for symbol in symbols:
-            # ✅ التحقق من طلب الإيقاف
-            if STOP_SIGNALS.get(user_id, False):
-                await update.message.reply_text("🛑 تم إيقاف الفحص بناءً على طلبك.")
-                return
+
+    for symbol in symbols:
+        # ✅ التحقق من طلب الإيقاف
+        if STOP_SIGNALS.get(user_id, False):
+            await update.message.reply_text("🛑 تم إيقاف الفحص بناءً على طلبك.")
+            return
 
             try:
                 # ✅ استخدام نظام الإشارات الاحترافي
@@ -973,11 +991,21 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     SignalType.STRONG_BUY, SignalType.BUY,
                     SignalType.STRONG_SELL, SignalType.SELL
                 ]:
-                    # ✅ التحقق من جودة الفرصة
+                    # ✅ جلب حجم التداول 24 ساعة
+                    try:
+                        ticker = exchange.fetch_ticker(symbol)
+                        volume_24h_usd = ticker.get('quoteVolume', 0)
+                        indicators['Volume_24h_USD'] = volume_24h_usd
+                    except:
+                        indicators['Volume_24h_USD'] = 0
+                    
+                    # ✅ التحقق من جودة الفرصة (مع فلترة التقلبات)
                     is_good, warnings = is_good_trading_opportunity(
                         signal, indicators,
-                        min_volume_ratio=0.6,  # أقل صرامة للفحص الشامل
-                        min_risk_reward=0.9   # أقل صرامة للفحص الشامل
+                        min_volume_ratio=0.6,      # أقل صرامة للفحص الشامل
+                        min_risk_reward=0.9,       # أقل صرامة للفحص الشامل
+                        max_volatility=7.0,        # استبعاد العملات بتقلبات > 7%
+                        min_volume_24h=500000      # حد أدنى $500K حجم تداول
                     )
                     
                     # ✅ حساب مستوى الضمان
@@ -994,8 +1022,8 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             opportunity_type = "📢 إشارة مبكرة"
                         
                         # ✅ جلب معلومات إضافية
-                        ticker = exchange.fetch_ticker(symbol)
-                        change_24h = ticker['percentage']
+            ticker = exchange.fetch_ticker(symbol)
+            change_24h = ticker['percentage']
                         volume_24h = ticker.get('quoteVolume', 0)
                         
                         # ✅ حساب نقاط الجودة (Quality Score)
@@ -1012,11 +1040,11 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             is_good, warnings, guarantee_level, guarantee_score,
                             opportunity_type, change_24h, volume_24h
                         ))
-                        
-            except Exception as e:
-                logger.debug(f"خطأ في {symbol}: {e}")
-                continue
-            
+
+        except Exception as e:
+            logger.debug(f"خطأ في {symbol}: {e}")
+            continue
+
             processed += 1
             if processed % 30 == 0:
                 await update.message.reply_text(f"⏳ تم فحص {processed} عملة...")
@@ -1131,15 +1159,23 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         indicators = calculate_advanced_indicators(df)
         signal = analyze_professional_signal(df, indicators)
         
-        # ✅ التحقق من جودة الفرصة
-        is_good, warnings = is_good_trading_opportunity(signal, indicators, min_volume_ratio=0.8, min_risk_reward=1.2)
+        # ✅ جلب حجم التداول 24 ساعة
+        ticker = exchange.fetch_ticker(symbol)
+        change_24h = ticker['percentage']
+        volume_24h = ticker.get('quoteVolume', 0)
+        indicators['Volume_24h_USD'] = volume_24h
+        
+        # ✅ التحقق من جودة الفرصة (مع فلترة التقلبات)
+        is_good, warnings = is_good_trading_opportunity(
+            signal, indicators,
+            min_volume_ratio=0.8,
+            min_risk_reward=1.2,
+            max_volatility=7.0,        # استبعاد العملات بتقلبات > 7%
+            min_volume_24h=500000      # حد أدنى $500K حجم تداول
+        )
         
         # ✅ حساب مستوى الضمان
         guarantee_level, guarantee_score = calculate_guarantee_level(signal, indicators)
-        
-        ticker = exchange.fetch_ticker(symbol)
-        change_24h = ticker['percentage']
-        volume_24h = ticker['quoteVolume'] if 'quoteVolume' in ticker else 0
         
         # ✅ تحديد متى يشتري/يبيع بشكل واضح
         action_advice = ""
@@ -1305,11 +1341,21 @@ async def signals_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
                 # ✅ إشارات شراء وبيع قوية أو متوسطة
                 if signal.signal_type in [SignalType.STRONG_BUY, SignalType.BUY, SignalType.STRONG_SELL, SignalType.SELL]:
-                    # ✅ التحقق من جودة الفرصة
+                    # ✅ جلب حجم التداول 24 ساعة
+                    try:
+                        ticker = exchange.fetch_ticker(symbol)
+                        volume_24h_usd = ticker.get('quoteVolume', 0)
+                        indicators['Volume_24h_USD'] = volume_24h_usd
+                    except:
+                        indicators['Volume_24h_USD'] = 0
+                    
+                    # ✅ التحقق من جودة الفرصة (مع فلترة التقلبات)
                     is_good, warnings = is_good_trading_opportunity(
                         signal, indicators, 
-                        min_volume_ratio=0.7,  # أقل صرامة للفحص الشامل
-                        min_risk_reward=1.0   # أقل صرامة للفحص الشامل
+                        min_volume_ratio=0.7,      # أقل صرامة للفحص الشامل
+                        min_risk_reward=1.0,       # أقل صرامة للفحص الشامل
+                        max_volatility=7.0,        # استبعاد العملات بتقلبات > 7%
+                        min_volume_24h=500000      # حد أدنى $500K حجم تداول
                     )
                     
                     # ✅ حساب مستوى الضمان
@@ -1340,7 +1386,7 @@ async def signals_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.debug(f"خطأ في {symbol}: {e}")
                 continue
-            
+        
             processed += 1
             if processed % 20 == 0:
                 await update.message.reply_text(f"⏳ تم فحص {processed} عملة...")
