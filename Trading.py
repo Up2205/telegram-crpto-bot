@@ -973,12 +973,12 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         signals_found = []
         processed = 0
-
-    for symbol in symbols:
-        # ✅ التحقق من طلب الإيقاف
-        if STOP_SIGNALS.get(user_id, False):
-            await update.message.reply_text("🛑 تم إيقاف الفحص بناءً على طلبك.")
-            return
+        
+        for symbol in symbols:
+            # ✅ التحقق من طلب الإيقاف
+            if STOP_SIGNALS.get(user_id, False):
+                await update.message.reply_text("🛑 تم إيقاف الفحص بناءً على طلبك.")
+                return
 
             try:
                 # ✅ استخدام نظام الإشارات الاحترافي
@@ -1022,8 +1022,8 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             opportunity_type = "📢 إشارة مبكرة"
                         
                         # ✅ جلب معلومات إضافية
-            ticker = exchange.fetch_ticker(symbol)
-            change_24h = ticker['percentage']
+                        ticker = exchange.fetch_ticker(symbol)
+                        change_24h = ticker['percentage']
                         volume_24h = ticker.get('quoteVolume', 0)
                         
                         # ✅ حساب نقاط الجودة (Quality Score)
@@ -1040,11 +1040,11 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             is_good, warnings, guarantee_level, guarantee_score,
                             opportunity_type, change_24h, volume_24h
                         ))
-
-        except Exception as e:
-            logger.debug(f"خطأ في {symbol}: {e}")
-            continue
-
+                        
+            except Exception as e:
+                logger.debug(f"خطأ في {symbol}: {e}")
+                continue
+            
             processed += 1
             if processed % 30 == 0:
                 await update.message.reply_text(f"⏳ تم فحص {processed} عملة...")
@@ -1151,7 +1151,7 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not validate_symbol(symbol):
         await update.message.reply_text(f"⚠️ العملة {symbol} غير موجودة.")
         return
-    
+
     try:
         await update.message.reply_text(f"🔍 جاري تحليل {symbol}...")
         
